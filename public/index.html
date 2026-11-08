@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>صراع الديدان</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; user-select: none; }
+    body { background: #0d0d1a; color: #fff; overflow: hidden; touch-action: none; }
+    #menu { position: fixed; inset: 0; background: rgba(13,13,26,0.95); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10; padding: 20px; }
+    h1 { color: #00ffcc; margin-bottom: 10px; font-size: 28px; text-shadow: 0 0 10px #00ffcc; }
+    .balance { font-size: 18px; margin-bottom: 20px; color: #ffd700; }
+    input, select, button { width: 100%; max-width: 300px; padding: 12px; margin: 8px 0; border-radius: 8px; border: none; font-size: 16px; }
+    input, select { background: #1e1e36; color: #fff; border: 1px solid #00ffcc; text-align: center; }
+    button { background: #00ffcc; color: #0d0d1a; font-weight: bold; cursor: pointer; }
+    #hud { position: fixed; top: 10px; left: 10px; right: 10px; display: none; justify-content: space-between; align-items: flex-start; pointer-events: none; z-index: 5; }
+    .box { background: rgba(0,0,0,0.6); padding: 8px 12px; border-radius: 8px; border: 1px solid #333; font-size: 14px; }
+    #cashoutBtn { pointer-events: auto; background: #ffaa00; color: #000; padding: 10px 15px; width: auto; font-size: 14px; margin: 0; }
+    #msg { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.85); padding: 20px; border-radius: 10px; border: 2px solid #00ffcc; display: none; z-index: 20; text-align: center; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <div id="menu">
+    <h1>🐍 صراع الديدان</h1>
+    <div class="balance">رصيدك: <span id="balDisplay">1000</span> نقطة</div>
+    <input type="text" id="nameInput" placeholder="اكتب اسمك هنا" maxlength="12">
+    <select id="betSelect">
+      <option value="100">رهان الدخول: 100 نقطة</option>
+      <option value="250">رهان الدخول: 250 نقطة</option>
+      <option value="500">رهان الدخول: 500 نقطة</option>
+    </select>
+    <button onclick="startGame()">ادخل الساحة</button>
+  </div>
+
+  <div id="hud">
+    <div class="box">
+      <div>الرهان الحالي: <span id="stakeDisplay" style="color:#00ffcc">0</span></div>
+      <div id="leaders" style="margin-top:5px; font-size:12px; color:#ccc;"></div>
+    </div>
+    <button id="cashoutBtn" onclick="requestCashOut()">انسحاب (3 ثوانٍ)</button>
+  </div>
+
+  <div id="msg"></div>
+  <canvas id="gameCanvas"></canvas>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    let balance = Number(localStorage.getItem('snake_bal')) || 1000;
+    let state = { players: {}, foods: [], arenaSize: 2000 };
+    let playing = false;
+
+    function updateBalUI() {
+      document.getElementById('balDisplay').innerText = balance;
+      localStorage.setItem('snake_bal', balance);
+    }
+    updateBalUI();
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    function startGame() {
+      const name = document.getElementById('nameInput').value.trim() || 'لاعب';
+      const bet = Number(document.getElementById('betSelect').value);
+      if (balance < bet) {
+        alert('رصيدك غير كافٍ! سيتم منحك 500 نقطة مجانية.');
+        balance += 500;
+        updateBalUI();
+        return;
+      }
+      balance -= bet;
+      updateBalUI();
+      socket.emit('joinGame', { name, bet });
+      document.getElementById('menu').style.display = 'none';
+      document.getElementById('hud').style.display = 'flex';
+      playing = true;
+    }
+
+    function requestCashOut() {
+      socket.emit('startCashOut');
+      const btn = document.getElementById('cashoutBtn');
+      btn.innerText = 'جاري الانسحاب...';
+      btn.disabled = true;
+    }
+
+    function showMsg(text) {
+      const m = document.getElementById('msg');
+      m.innerText = text;
+      m.style.display = 'block';
+      setTimeout(() => {
+        m.style.display = 'none';
+        document.getElementById('menu').style.display = 'flex';
+        document.getElementById('hud').style.display = 'none';
+        const btn = document.getElementById('cashoutBtn');
+        btn.innerText = 'انسحاب (3 ثوانٍ)';
+        btn.disabled = false;
+      }, 2500);
+    }
+
+    socket.on('cashedOut', (amount) => {
+      playing = false;
+      balance += amount;
+      updateBalUI();
+      showMsg(`تم الانسحاب بنجاح! ربحت ${amount} نقطة`);
+    });
+
+    socket.on('eliminated', () => {
+      playing = false;
+      showMsg('تم أكلك! خسرت رهان الجولة');
+    });
+
+    socket.on('state', (newState) => {
+      state = newState;
+      const me = state.players[socket.id];
+      if (me) document.getElementById('stakeDisplay').innerText = me.stake;
+
+      const sorted = Object.values(state.players).sort((a, b) => b.stake - a.stake).slice(0, 3);
+      document.getElementById('leaders').innerHTML = sorted.map((p, i) => `${i + 1}. ${p.name}: ${p.stake}`).join('<br>');
+    });
+
+    function handleMove(x, y) {
+      if (!playing) return;
+      const angle = Math.atan2(y - canvas.height / 2, x - canvas.width / 2);
+      socket.emit('updateAngle', angle);
+    }
+
+    window.addEventListener('touchmove', (e) => handleMove(e.touches.clientX, e.touches.clientY));
+    window.addEventListener('touchstart', (e) => handleMove(e.touches.clientX, e.touches.clientY));
+    window.addEventListener('mousemove', (e) => handleMove(e.clientX, e.clientY));
+
+    function draw() {
+      ctx.fillStyle = '#0d0d1a';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const me = state.players[socket.id];
+      const camX = me ? me.segments.x - canvas.width / 2 : 0;
+      const camY = me ? me.segments.y - canvas.height / 2 : 0;
+
+      ctx.save();
+      ctx.translate(-camX, -camY);
+
+      ctx.strokeStyle = '#ff0055';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(0, 0, state.arenaSize, state.arenaSize);
+
+      for (const f of state.foods) {
+        ctx.fillStyle = f.color;
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      for (const id in state.players) {
+        const p = state.players[id];
+        ctx.fillStyle = p.color;
+        for (let i = p.segments.length - 1; i >= 0; i--) {
+          const s = p.segments[i];
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, i === 0 ? 11 : 9, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.fillStyle = '#fff';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${p.name} (${p.stake})`, p.segments.x, p.segments.y - 16);
+      }
+
+      ctx.restore();
+      requestAnimationFrame(draw);
+    }
+    draw();
+  </script>
+</body>
+</html>
